@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">ScrapDisk Doctor</string>
+    <string name="app_subtitle">Diagnóstico Rápido OTG para Desguaces</string>
+    <string name="btn_select_drive">SELECCIONAR DISCO Y TESTEAR</string>
+    <string name="btn_retest">VOLVER A TESTEAR</string>
+    <string name="btn_history">HISTORIAL DE PRUEBAS</string>
+    <string name="lbl_ready">Conecta tu disco por OTG y presiona el botón para iniciar la prueba de 30 segundos.</string>
+    <string name="lbl_testing">Ejecutando prueba de estrés en disco…</string>
+    <string name="size_10mb">10 MB (Ultra Rápido - 10s)</string>
+    <string name="size_30mb">30 MB (Recomendado - 20s)</string>
+    <string name="size_50mb">50 MB (Profundo - 35s)</string>
+</resources>

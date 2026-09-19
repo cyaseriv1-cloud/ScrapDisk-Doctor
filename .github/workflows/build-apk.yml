@@ -1,0 +1,71 @@
+name: Compilar APK ScrapDisk Doctor
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Compilar APK con Gradle
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: 2. Configurar Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: 3. Dar permisos de ejecución a gradlew
+        run: chmod +x gradlew
+
+      - name: 4. Compilar APK Debug
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: 5. Renombrar archivo APK para descarga
+        run: |
+          mkdir -p release-output
+          cp app/build/outputs/apk/debug/app-debug.apk release-output/ScrapDisk-Doctor-v1.0.apk
+
+      - name: 6. Subir APK como artefacto de compilación
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScrapDisk-Doctor-APK
+          path: release-output/ScrapDisk-Doctor-v1.0.apk
+          retention-days: 14
+
+      - name: 7. Publicar Release automático en GitHub
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          tag_name: v1.0.0
+          name: "ScrapDisk Doctor v1.0.0 (APK Instalable para Móvil)"
+          body: |
+            ### 🚀 ScrapDisk Doctor v1.0.0
+            
+            Aplicación Android para diagnóstico y prueba rápida de discos duros y SSDs conectados por OTG en mercadillos y desguaces.
+            
+            #### 📱 ¿Cómo instalar en tu móvil (Oppo Find X5)?
+            1. Descarga el archivo **`ScrapDisk-Doctor-v1.0.apk`** adjunto aquí abajo directamente desde tu teléfono.
+            2. Toca la notificación o archivo descargado y presiona **Instalar** (permite "Instalar apps de fuentes desconocidas" si te lo solicita).
+            3. Conecta tu cable OTG con el disco duro.
+            4. Abre la app, presiona **SELECCIONAR DISCO Y TESTEAR**, escoge la unidad USB y ¡listo!
+            
+            #### ⚡ Características:
+            - Prueba de estrés rápida (10 MB, 30 MB o 50 MB).
+            - Medición real de velocidad de lectura y escritura (MB/s).
+            - Comprobación de integridad con hash MD5 para detectar sectores muertos o corrupción.
+            - Veredicto visual instantáneo tipo semáforo (🟢/🟡/🔴).
+            - Respuesta por vibración háptica.
+            - Historial de pruebas guardadas.
+          files: release-output/ScrapDisk-Doctor-v1.0.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
