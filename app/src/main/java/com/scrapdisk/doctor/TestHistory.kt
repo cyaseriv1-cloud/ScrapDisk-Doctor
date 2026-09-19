@@ -18,31 +18,20 @@ class TestHistory(context: Context) {
 
     private val prefs = context.getSharedPreferences("scrap_disk_history", Context.MODE_PRIVATE)
 
-    fun saveTest(result: TestResult, testSizeMB: Int) {
+    fun saveTest(result: SimpleTestResult) {
         val currentList = loadHistory().toMutableList()
         val dateFormat = SimpleDateFormat("HH:mm - dd MMM", Locale.getDefault())
         val dateStr = dateFormat.format(Date())
 
-        val details = if (result.success) {
-            String.format(
-                Locale.US,
-                "Prueba %dMB | Esc: %.1f MB/s | Lec: %.1f MB/s",
-                testSizeMB,
-                result.writeSpeedMBs,
-                result.readSpeedMBs
-            )
-        } else {
-            result.errorMessage ?: "Error en prueba"
-        }
+        val details = "${result.speedText} | ${result.verdictDetail}"
 
         currentList.add(0, HistoryItem(
             verdict = result.verdictTitle,
             details = details,
             dateStr = dateStr,
-            isSuccess = result.success
+            isSuccess = result.isGood || result.isWarning
         ))
 
-        // Mantener solo los últimos 30 registros
         val trimmedList = currentList.take(30)
         val jsonArray = JSONArray()
         for (item in trimmedList) {
