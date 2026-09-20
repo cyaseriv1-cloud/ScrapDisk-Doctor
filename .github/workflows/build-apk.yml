@@ -33,32 +33,30 @@ jobs:
       - name: 5. Renombrar archivo APK para descarga
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/release/app-release.apk release-output/ScrapDisk-Doctor-v1.3.apk
+          cp app/build/outputs/apk/release/app-release.apk release-output/ScrapDisk-Doctor-v1.4.apk
 
       - name: 6. Subir APK como artefacto de compilación
         uses: actions/upload-artifact@v4
         with:
           name: ScrapDisk-Doctor-APK
-          path: release-output/ScrapDisk-Doctor-v1.3.apk
+          path: release-output/ScrapDisk-Doctor-v1.4.apk
           retention-days: 14
 
       - name: 7. Publicar Release automático en GitHub
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          tag_name: v1.3.0
-          name: "ScrapDisk Doctor v1.3.0 (Botón de Parar y Anti-Cuelgues)"
+          tag_name: v1.4.0
+          name: "ScrapDisk Doctor v1.4.0 (Anti-Indexación y Expulsión Segura)"
           body: |
-            ### 🚀 ScrapDisk Doctor v1.3.0
+            ### 🚀 ScrapDisk Doctor v1.4.0
             
-            #### ⚡ Mejoras clave añadidas:
-            1. **Botón de PARAR / CANCELAR en tiempo real:**
-               - Mientras la app está diagnosticando, el botón principal se transforma en **`⏹️ CANCELAR PRUEBA`** en color rojo.
-               - Si una partición tarda mucho o está en mal estado, puedes tocarlo en cualquier momento para detener la prueba de inmediato **sin necesidad de desconectar el cable OTG**.
-            2. **Temporizador Guardián en pantalla (Watchdog de 5.5s):**
-               - Si una partición defectuosa congela el controlador del sistema, la pantalla corta automáticamente a los 5.5 segundos y te muestra: `🔴 PARTICIÓN DAÑADA / TRABADA`.
-            3. **Lectura ligera con cursor directo:**
-               - Evita sobrecargar la memoria en particiones de Windows con miles de archivos.
-          files: release-output/ScrapDisk-Doctor-v1.3.apk
+            #### ⚡ Mejoras en v1.4.0:
+            1. **Detención del "Máximo Esfuerzo" en segundo plano:**
+               - Se eliminó la toma de permisos persistentes innecesarios que provocaban que el servicio `MediaScanner` de Android intentara rastrear e indexar todo el disco de 1TB buscando fotos y videos en segundo plano tras terminar el análisis.
+               - Liberación inmediata de descriptores de archivos y recolección de basura forzada al culminar la prueba.
+            2. **Botón de Expulsión y Reposo Seguro:**
+               - Añadido el botón **`⏏️ LIBERAR / EXPULSAR DISCO SEGURO`** que desconecta la app del disco y permite abrir la configuración de almacenamiento para detener los motores de forma segura antes de retirar el cable OTG.
+          files: release-output/ScrapDisk-Doctor-v1.4.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
