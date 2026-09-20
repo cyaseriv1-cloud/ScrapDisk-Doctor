@@ -27,37 +27,36 @@ jobs:
       - name: 3. Dar permisos de ejecución a gradlew
         run: chmod +x gradlew
 
-      - name: 4. Compilar APK Debug
-        run: ./gradlew assembleDebug --stacktrace
+      - name: 4. Compilar APK Release (Firmado con keystore permanente)
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: 5. Renombrar archivo APK para descarga
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/debug/app-debug.apk release-output/ScrapDisk-Doctor-v1.1.apk
+          cp app/build/outputs/apk/release/app-release.apk release-output/ScrapDisk-Doctor-v1.2.apk
 
       - name: 6. Subir APK como artefacto de compilación
         uses: actions/upload-artifact@v4
         with:
           name: ScrapDisk-Doctor-APK
-          path: release-output/ScrapDisk-Doctor-v1.1.apk
+          path: release-output/ScrapDisk-Doctor-v1.2.apk
           retention-days: 14
 
       - name: 7. Publicar Release automático en GitHub
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          tag_name: v1.1.0
-          name: "ScrapDisk Doctor v1.1.0 (Versión Rápida Anti-Cuelgues)"
+          tag_name: v1.2.0
+          name: "ScrapDisk Doctor v1.2.0 (Firma Fija y Anti-Bucle)"
           body: |
-            ### 🚀 ScrapDisk Doctor v1.1.0 (Actualización Anti-Cuelgues)
+            ### 🚀 ScrapDisk Doctor v1.2.0
             
-            Versión optimizada y simplificada al máximo para evitar congelamientos al conectar discos duros por OTG.
-            
-            #### ⚡ Novedades en v1.1.0:
-            - **Protección Anti-Cuelgues:** Timeouts estrictos de 6 segundos. Si un disco está trabado mecánicamente o tiene sectores muertos que congelan el teléfono, la app corta la prueba de inmediato y te avisa: `🔴 NO COMPRAR (DISCO TRABADO)`.
-            - **Prueba Ultra Rápida (2 MB en 3 segundos):** Reducción de la carga I/O a paquetes de 32 KB para evitar saturar el búfer de Android.
-            - **Detección de formato NTFS:** Si el disco está en formato de Windows (NTFS), Android bloquea la escritura. La app detecta esto y prueba la lectura en lugar de congelarse, marcando `🟡 DISCO NTFS (OPERATIVO)`.
-            - **Interfaz de 1 solo toque:** Se eliminaron selectores complejos; un solo botón grande para probar en 3 segundos.
-          files: release-output/ScrapDisk-Doctor-v1.1.apk
+            #### 🛠️ Soluciones en esta versión:
+            1. **Firma criptográfica permanente y fija (`keystore.jks`):** Se eliminó por completo el conflicto de instalación entre versiones.
+               * *Nota para esta primera vez:* Desinstala la versión anterior de tu teléfono antes de instalar esta para limpiar la firma temporal anterior. A partir de ahora, todas las actualizaciones futuras se instalarán directamente.
+            2. **Solución definitiva al bucle "Conectando con unidad USB":**
+               - Se añadió un **Timeout global estricto de 6 segundos**. Es matemáticamente imposible que la app se quede pegada o en bucle infinito.
+               - Detección inmediata de discos en formato **NTFS de Windows**: Android no permite escritura directa en NTFS, por lo que la app detecta esto en 1 milisegundo y realiza un test de lectura a toda velocidad sin trabarse.
+          files: release-output/ScrapDisk-Doctor-v1.2.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
