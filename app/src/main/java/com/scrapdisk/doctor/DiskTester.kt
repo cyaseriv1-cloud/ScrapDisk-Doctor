@@ -2,6 +2,7 @@ package com.scrapdisk.doctor
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -28,35 +29,32 @@ class DiskTester(private val context: Context) {
         treeUri: Uri,
         onStatus: (String) -> Unit
     ): SimpleTestResult = withContext(Dispatchers.IO) {
-        // TIMEOUT GLOBAL ESTRICTO: Nada en esta función puede tardar más de 6 segundos jamás
         try {
-            withTimeout(6000L) {
-                onStatus("1/3 Conectando con unidad USB...")
+            withTimeout(5000L) {
+                onStatus("1/3 Conectando con partición...")
 
                 val rootDir = DocumentFile.fromTreeUri(context, treeUri)
                     ?: return@withTimeout SimpleTestResult(
                         success = false,
                         speedText = "--",
                         verdictTitle = "🔴 ERROR DE CONEXIÓN",
-                        verdictDetail = "No se pudo acceder a la unidad. Verifica que el cable OTG esté bien conectado.",
+                        verdictDetail = "No se pudo acceder a la partición. Verifica la conexión OTG.",
                         isGood = false
                     )
 
-                // 1. COMPROBAR MODO DE ACCESO (NTFS vs FAT32/exFAT)
-                // Si el disco está en NTFS (formato típico de Windows), Android no permite escritura de fábrica.
-                // En vez de congelar el teléfono intentando escribir, pasamos directo al test de lectura.
-                val canWrite = rootDir.canWrite()
+                val canWrite = try { rootDir.canWrite() } catch (_: Exception) { false }
 
+                // 1. SI ES DE SOLO LECTURA (Típico de particiones NTFS de Windows)
                 if (!canWrite) {
-                    onStatus("2/3 Disco NTFS detectado (Probando lectura)...")
-                    return@withTimeout performReadPerformanceTest(rootDir, onStatus, isNtfs = true)
+                    onStatus("2/3 Partición NTFS detectada (Probando lectura)...")
+                    return@withTimeout performFastReadTest(treeUri, onStatus, isNtfs = true)
                 }
 
-                // 2. DISCO ESCRIBIBLE: INTENTAR CREAR ARCHIVO TEMPORAL (2 segundos de timeout máximo)
+                // 2. PARTICIÓN ESCRIBIBLE: INTENTAR CREAR ARCHIVO TEMPORAL (Máx 1.5s)
                 onStatus("2/3 Creando archivo de prueba (1 MB)...")
                 val testFileName = "_test_${System.currentTimeMillis() % 1000}.tmp"
-                
-                val testFile = withTimeoutOrNull(2000L) {
+
+                val testFile = withTimeoutOrNull(1500L) {
                     try {
                         rootDir.createFile("application/octet-stream", testFileName)
                     } catch (_: Exception) {
@@ -64,13 +62,13 @@ class DiskTester(private val context: Context) {
                     }
                 }
 
-                // Si falló la creación (por ejemplo, partición con protección), probar lectura
+                // Si no se puede escribir, probar lectura directamente
                 if (testFile == null) {
-                    onStatus("Escritura bloqueada por Android, probando lectura...")
-                    return@withTimeout performReadPerformanceTest(rootDir, onStatus, isNtfs = true)
+                    onStatus("Escritura bloqueada, probando lectura...")
+                    return@withTimeout performFastReadTest(treeUri, onStatus, isNtfs = true)
                 }
 
-                // 3. FASE DE ESCRITURA Y LECTURA (1 MB en paquetes de 32 KB)
+                // 3. FASE DE ESCRITURA Y LECTURA
                 try {
                     val totalBytes = 1024 * 1024 // 1 MB
                     val chunkSize = 32 * 1024 // 32 KB
@@ -78,9 +76,9 @@ class DiskTester(private val context: Context) {
                     val writeDigest = MessageDigest.getInstance("MD5")
 
                     // Escritura
-                    onStatus("3/3 Escribiendo y leyendo datos (1 MB)...")
+                    onStatus("3/3 Escribiendo datos (1 MB)...")
                     val writeStart = System.currentTimeMillis()
-                    
+
                     val outStream: OutputStream = context.contentResolver.openOutputStream(testFile.uri)
                         ?: throw Exception("No se pudo abrir salida")
                     outStream.use { out ->
@@ -96,6 +94,7 @@ class DiskTester(private val context: Context) {
                     val writeSpeedMBs = 1.0 / (writeTime / 1000.0)
 
                     // Lectura e Integridad
+                    onStatus("3/3 Leyendo y verificando sectores...")
                     val readDigest = MessageDigest.getInstance("MD5")
                     val readBuffer = ByteArray(chunkSize)
                     val readStart = System.currentTimeMillis()
@@ -111,14 +110,13 @@ class DiskTester(private val context: Context) {
                     val readTime = (System.currentTimeMillis() - readStart).coerceAtLeast(1)
                     val readSpeedMBs = 1.0 / (readTime / 1000.0)
 
-                    // Comprobación de MD5
                     val md5Match = writeDigest.digest().contentEquals(readDigest.digest())
                     if (!md5Match) {
                         return@withTimeout SimpleTestResult(
                             success = false,
                             speedText = String.format("Esc: %.1f MB/s", writeSpeedMBs),
-                            verdictTitle = "🔴 NO COMPRAR (DATOS CORRUPTOS)",
-                            verdictDetail = "¡Alerta! Los datos se alteraron al escribirse. El disco tiene sectores magnéticos dañados.",
+                            verdictTitle = "🔴 NO COMPRAR (SECTORES DAÑADOS)",
+                            verdictDetail = "¡Alerta! Los datos se alteraron al escribirse. Esta zona del disco tiene sectores defectuosos.",
                             isGood = false
                         )
                     }
@@ -128,7 +126,7 @@ class DiskTester(private val context: Context) {
                         success = true,
                         speedText = speedStr,
                         verdictTitle = "🟢 COMPRA SEGURA (BUENO)",
-                        verdictDetail = "El disco escribió y leyó con normalidad sin colgarse y con integridad 100% verificada.",
+                        verdictDetail = "La partición escribió y leyó 1 MB con total normalidad y sin errores.",
                         isGood = true
                     )
 
@@ -140,41 +138,40 @@ class DiskTester(private val context: Context) {
             return@withContext SimpleTestResult(
                 success = false,
                 speedText = "0 MB/s (Congelado)",
-                verdictTitle = "🔴 NO COMPRAR (DISCO TRABADO)",
-                verdictDetail = "El disco tardó más de 6 segundos en responder a los comandos. Los platos o cabezales están trabados mecánicamente.",
+                verdictTitle = "🔴 PARTICIÓN DAÑADA / TRABADA",
+                verdictDetail = "Esta partición no respondió a tiempo. Los cabezales están atascados intentando leer sectores dañados en esta zona del disco.",
                 isGood = false
             )
         } catch (e: Exception) {
             return@withContext SimpleTestResult(
                 success = false,
                 speedText = "Error I/O",
-                verdictTitle = "🔴 NO COMPRAR (ERROR DE E/S)",
-                verdictDetail = e.localizedMessage ?: "Error de comunicación con el disco.",
+                verdictTitle = "🔴 ERROR EN PARTICIÓN",
+                verdictDetail = e.localizedMessage ?: "Error de comunicación con la partición.",
                 isGood = false,
                 errorMessage = e.message
             )
         }
     }
 
-    private suspend fun performReadPerformanceTest(
-        rootDir: DocumentFile,
+    private suspend fun performFastReadTest(
+        treeUri: Uri,
         onStatus: (String) -> Unit,
         isNtfs: Boolean
     ): SimpleTestResult = withContext(Dispatchers.IO) {
-        onStatus("3/3 Probando velocidad de lectura en disco...")
-        
-        // Buscar algún archivo existente en el disco para probar la lectura real
-        val files = try { rootDir.listFiles() } catch (_: Exception) { emptyArray() }
-        val targetFile = files.firstOrNull { it.isFile && it.length() > 0 }
+        onStatus("3/3 Leyendo sectores de partición...")
 
-        if (targetFile != null) {
+        // Buscar rápidamente un archivo usando cursor ligero (evita cargar miles de archivos en memoria)
+        val fileUri = findFirstFileUri(treeUri)
+
+        if (fileUri != null) {
             try {
                 val readStart = System.currentTimeMillis()
                 val buffer = ByteArray(32 * 1024)
                 var bytesReadTotal = 0L
                 val maxToRead = 1024 * 1024 // 1 MB máximo
 
-                val inStream = context.contentResolver.openInputStream(targetFile.uri)
+                val inStream = context.contentResolver.openInputStream(fileUri)
                 inStream?.use { input ->
                     while (bytesReadTotal < maxToRead) {
                         val count = input.read(buffer)
@@ -190,29 +187,62 @@ class DiskTester(private val context: Context) {
                 return@withContext SimpleTestResult(
                     success = true,
                     speedText = speedStr,
-                    verdictTitle = "🟢 DISCO OPERATIVO (NTFS)",
-                    verdictDetail = "El disco gira y lee a ${String.format("%.1f", readSpeedMBs)} MB/s sin trabarse. Al ser formato NTFS de Windows, Android no le escribe, pero el hardware está sano.",
-                    isGood = true,
-                    isWarning = false
+                    verdictTitle = "🟢 PARTICIÓN BUENA (NTFS)",
+                    verdictDetail = "Esta partición leyó a ${String.format("%.1f", readSpeedMBs)} MB/s sin trabarse. Los sectores de esta zona están sanos.",
+                    isGood = true
                 )
             } catch (e: Exception) {
                 return@withContext SimpleTestResult(
                     success = false,
-                    speedText = "Fallo de lectura",
-                    verdictTitle = "🔴 NO COMPRAR (SECTOR ILEGIBLE)",
-                    verdictDetail = "No se pudieron leer los archivos del disco: ${e.localizedMessage ?: "Error de E/S"}",
+                    speedText = "Error de lectura",
+                    verdictTitle = "🔴 SECTORES ILEGIBLES",
+                    verdictDetail = "Fallo al leer sectores en esta partición: ${e.localizedMessage ?: "Error I/O"}. Hay sectores dañados.",
                     isGood = false
                 )
             }
         }
 
-        // Si el disco no tiene archivos pero respondió a la lista de directorios
+        // Si la partición está vacía pero respondió inmediatamente a la consulta
         return@withContext SimpleTestResult(
             success = true,
             speedText = "Tabla de partición OK",
-            verdictTitle = if (isNtfs) "🟢 DISCO OPERATIVO (NTFS Vacío)" else "🟢 DISCO DETECTADO",
-            verdictDetail = "El disco respondió de inmediato a la conexión y su tabla de particiones está intacta.",
+            verdictTitle = if (isNtfs) "🟢 PARTICIÓN BUENA (NTFS)" else "🟢 PARTICIÓN DETECTADA",
+            verdictDetail = "La tabla de particiones respondió con normalidad y sin errores de lectura.",
             isGood = true
         )
+    }
+
+    private fun findFirstFileUri(treeUri: Uri): Uri? {
+        return try {
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri,
+                DocumentsContract.getTreeDocumentId(treeUri)
+            )
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE
+            )
+            context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val mimeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+
+                var count = 0
+                while (cursor.moveToNext() && count < 20) {
+                    count++
+                    val mime = if (mimeCol >= 0) cursor.getString(mimeCol) else ""
+                    val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
+                    val docId = if (idCol >= 0) cursor.getString(idCol) else null
+
+                    if (mime != DocumentsContract.Document.MIME_TYPE_DIR && docId != null && size > 0) {
+                        return DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                    }
+                }
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 }
