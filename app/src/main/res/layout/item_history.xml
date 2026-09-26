@@ -2,11 +2,12 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="8dp"
+    android:layout_marginBottom="10dp"
     android:background="@drawable/bg_rounded_card"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:padding="14dp">
 
+    <!-- Fila superior: Veredicto y Fecha -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -33,12 +34,46 @@
 
     </LinearLayout>
 
+    <!-- Etiqueta del disco (si fue etiquetado) -->
+    <TextView
+        android:id="@+id/tvItemLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
+        android:text="🏷️ Disco #1 - Toshiba 1TB"
+        android:textColor="@color/accent"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <!-- Información de Ganga / Precio -->
+    <TextView
+        android:id="@+id/tvItemBargain"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="💎 Ganga: $15 por 1TB ($0.015/GB)"
+        android:textColor="@color/status_good"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <!-- Tipo de unidad y latencia -->
+    <TextView
+        android:id="@+id/tvItemDriveType"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="💽 HDD Mecánico | Latencia: 14 ms"
+        android:textColor="@color/text_muted"
+        android:textSize="12sp" />
+
+    <!-- Detalles de velocidad -->
     <TextView
         android:id="@+id/tvItemDetails"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="Escritura: 45.2 MB/s | Lectura: 82.1 MB/s | OK"
+        android:layout_marginTop="2dp"
+        android:text="Esc: 45.2 MB/s | Lec: 82.1 MB/s | OK"
         android:textColor="@color/text_body"
         android:textSize="12sp" />
 

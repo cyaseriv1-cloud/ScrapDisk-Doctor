@@ -5,8 +5,11 @@ import android.content.res.ColorStateList
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,30 +17,32 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.button.MaterialButtonToggleGroup
 import com.scrapdisk.doctor.databinding.ActivityMainBinding
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var diskTester: DiskTester
     private lateinit var hapticHelper: HapticFeedbackHelper
+    private lateinit var soundHelper: SoundFeedbackHelper
+    private lateinit var usbHardwareHelper: UsbHardwareHelper
     private lateinit var testHistory: TestHistory
 
     private var isTesting = false
     private var testJob: Job? = null
     private var watchdogJob: Job? = null
+    private var latestResult: SimpleTestResult? = null
 
     private val selectDriveLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         if (uri != null) {
-            // NOTA CRÍTICA: NO llamamos a takePersistableUriPermission()
-            // Tomar permisos persistentes hace que el servicio MediaScanner de Android
-            // intente indexar todo el disco de 1TB en segundo plano buscando fotos y videos,
-            // dejando los cabezales del disco rascando al 100% de esfuerzo.
             executeDiskTest(uri)
         } else {
             showReadyState("No se seleccionó ninguna partición o unidad.")
@@ -51,17 +56,29 @@ class MainActivity : AppCompatActivity() {
 
         diskTester = DiskTester(this)
         hapticHelper = HapticFeedbackHelper(this)
+        soundHelper = SoundFeedbackHelper(this)
+        usbHardwareHelper = UsbHardwareHelper(this)
         testHistory = TestHistory(this)
 
-        // Limpiar permisos persistentes residuales de versiones anteriores que puedan tener al indexador despierto
         cleanupPersistedPermissions()
-
         setupListeners()
+        updateSoundToggleUi()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateUsbHardwareBanner()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        soundHelper.release()
     }
 
     private fun setupListeners() {
-        // Botón principal: si está testeando, funciona como botón de PARAR/CANCELAR
+        // Botón principal: test o cancelar si está activo
         binding.btnSelectDrive.setOnClickListener {
+            soundHelper.playClick()
             if (isTesting) {
                 cancelActiveTest("Prueba cancelada por el usuario.")
             } else {
@@ -71,19 +88,58 @@ class MainActivity : AppCompatActivity() {
 
         // Botón de expulsión / desconexión segura
         binding.btnEjectDrive.setOnClickListener {
+            soundHelper.playClick()
             safeEjectDrive()
         }
 
         // Botón de historial
         binding.btnOpenHistory.setOnClickListener {
+            soundHelper.playClick()
             showHistoryDialog()
         }
+
+        // Botón de sonido (Mute / Unmute)
+        binding.btnToggleSound.setOnClickListener {
+            soundHelper.isSoundEnabled = !soundHelper.isSoundEnabled
+            soundHelper.playClick()
+            updateSoundToggleUi()
+        }
+
+        // Actualizar banner USB al tocar icono
+        binding.btnRefreshUsb.setOnClickListener {
+            soundHelper.playClick()
+            updateUsbHardwareBanner()
+        }
+
+        // Abrir calculadora de ganga tras la prueba
+        binding.btnOpenBargainDialog.setOnClickListener {
+            soundHelper.playClick()
+            showBargainDialog()
+        }
+    }
+
+    private fun updateSoundToggleUi() {
+        if (soundHelper.isSoundEnabled) {
+            binding.btnToggleSound.setImageResource(R.drawable.ic_volume_up)
+            binding.btnToggleSound.imageTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.primary)
+            )
+        } else {
+            binding.btnToggleSound.setImageResource(R.drawable.ic_volume_off)
+            binding.btnToggleSound.imageTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.text_muted)
+            )
+        }
+    }
+
+    private fun updateUsbHardwareBanner() {
+        val hwInfo = usbHardwareHelper.getConnectedStorageInfo()
+        binding.tvUsbHardwareInfo.text = hwInfo.summary
     }
 
     private fun executeDiskTest(uri: Uri) {
         isTesting = true
 
-        // Transformar botón a botón de CANCELAR rojo
         binding.btnSelectDrive.text = "⏹️ CANCELAR PRUEBA"
         binding.btnSelectDrive.backgroundTintList = ColorStateList.valueOf(
             ContextCompat.getColor(this, R.color.status_bad)
@@ -93,14 +149,17 @@ class MainActivity : AppCompatActivity() {
         binding.progressTest.visibility = View.VISIBLE
         binding.tvProgressStatus.visibility = View.VISIBLE
         binding.tvSpeedResult.visibility = View.GONE
+        binding.tvLatencyResult.visibility = View.GONE
+        binding.badgeDriveType.visibility = View.GONE
+        binding.btnOpenBargainDialog.visibility = View.GONE
 
         binding.ivStatusIcon.setImageResource(R.drawable.ic_harddrive)
         binding.ivStatusIcon.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(this, R.color.primary))
         binding.tvVerdictTitle.text = "DIAGNOSTICANDO..."
         binding.tvVerdictTitle.setTextColor(ContextCompat.getColor(this, R.color.text_title))
-        binding.tvVerdictDetail.text = "Comprobando velocidad e integridad de sectores..."
+        binding.tvVerdictDetail.text = "Comprobando velocidad, latencia e integridad de sectores..."
 
-        // 1. Temporizador Guardián (Watchdog) de 5.5s
+        // Temporizador Guardián (Watchdog) de 5.5s
         watchdogJob?.cancel()
         watchdogJob = lifecycleScope.launch {
             delay(5500L)
@@ -110,14 +169,15 @@ class MainActivity : AppCompatActivity() {
                     success = false,
                     speedText = "0 MB/s (Congelado)",
                     verdictTitle = "🔴 PARTÍCIÓN DAÑADA / TRABADA",
-                    verdictDetail = "Esta partición no respondió en 5 segundos. Los cabezales están atascados en sectores defectuosos de esta zona del disco.",
-                    isGood = false
+                    verdictDetail = "Esta partición no respondió en 5 segundos. Los cabezales están atascados en sectores defectuosos.",
+                    isGood = false,
+                    driveType = "💽 Mecánico Trabado",
+                    latencyText = "Latencia: > 5000 ms"
                 )
                 onTestFinished(timeoutResult)
             }
         }
 
-        // 2. Ejecutar prueba
         testJob?.cancel()
         testJob = lifecycleScope.launch {
             val result = diskTester.runFastTest(uri) { statusText ->
@@ -141,21 +201,22 @@ class MainActivity : AppCompatActivity() {
             verdictTitle = "⏹️ PRUEBA DETENIDA",
             verdictDetail = "$reason Si se quedó colgado, esta partición tiene sectores que traban la lectura.",
             isGood = false,
-            isWarning = true
+            isWarning = true,
+            driveType = "💽 Prueba Interrumpida",
+            latencyText = "Latencia: Cancelada"
         )
         onTestFinished(cancelResult)
     }
 
     private fun onTestFinished(result: SimpleTestResult) {
         isTesting = false
+        latestResult = result
         renderResult(result)
         testHistory.saveTest(result)
 
-        // Liberar referencias y forzar recolección de basura para cerrar descriptores de archivos de inmediato
         cleanupPersistedPermissions()
         System.gc()
 
-        // Restaurar botón principal a modo normal
         binding.btnSelectDrive.text = "⚡ PROBAR OTRA PARTICIÓN"
         binding.btnSelectDrive.backgroundTintList = ColorStateList.valueOf(
             ContextCompat.getColor(this, R.color.primary)
@@ -163,6 +224,146 @@ class MainActivity : AppCompatActivity() {
         binding.btnSelectDrive.setIconResource(R.drawable.ic_harddrive)
         binding.progressTest.visibility = View.GONE
         binding.tvProgressStatus.visibility = View.GONE
+
+        // Mostrar botón de calculadora de ganga si la prueba fue exitosa
+        if (result.success) {
+            binding.btnOpenBargainDialog.visibility = View.VISIBLE
+        }
+    }
+
+    private fun renderResult(result: SimpleTestResult) {
+        binding.tvVerdictTitle.text = result.verdictTitle
+        binding.tvVerdictDetail.text = result.verdictDetail
+
+        binding.tvSpeedResult.visibility = View.VISIBLE
+        binding.tvSpeedResult.text = result.speedText
+
+        binding.tvLatencyResult.visibility = View.VISIBLE
+        binding.tvLatencyResult.text = result.latencyText
+
+        binding.badgeDriveType.visibility = View.VISIBLE
+        binding.badgeDriveType.text = result.driveType
+
+        when {
+            result.isGood -> {
+                val color = ContextCompat.getColor(this, R.color.status_good)
+                binding.ivStatusIcon.setImageResource(R.drawable.ic_check_circle)
+                binding.ivStatusIcon.imageTintList = ColorStateList.valueOf(color)
+                binding.tvVerdictTitle.setTextColor(color)
+                binding.tvSpeedResult.setTextColor(color)
+                hapticHelper.vibrateSuccess()
+                soundHelper.playSuccess()
+            }
+            result.isWarning -> {
+                val color = ContextCompat.getColor(this, R.color.status_warning)
+                binding.ivStatusIcon.setImageResource(R.drawable.ic_alert_triangle)
+                binding.ivStatusIcon.imageTintList = ColorStateList.valueOf(color)
+                binding.tvVerdictTitle.setTextColor(color)
+                binding.tvSpeedResult.setTextColor(color)
+                hapticHelper.vibrateWarning()
+                soundHelper.playWarning()
+            }
+            else -> {
+                val color = ContextCompat.getColor(this, R.color.status_bad)
+                binding.ivStatusIcon.setImageResource(R.drawable.ic_x_circle)
+                binding.ivStatusIcon.imageTintList = ColorStateList.valueOf(color)
+                binding.tvVerdictTitle.setTextColor(color)
+                binding.tvSpeedResult.setTextColor(color)
+                hapticHelper.vibrateFailure()
+                soundHelper.playFailure()
+            }
+        }
+    }
+
+    private fun showBargainDialog() {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_bargain, null)
+        val etLabel = dialogView.findViewById<EditText>(R.id.etDiskLabel)
+        val etPrice = dialogView.findViewById<EditText>(R.id.etDiskPrice)
+        val toggleCapacity = dialogView.findViewById<MaterialButtonToggleGroup>(R.id.toggleCapacity)
+        val tvPricePerGb = dialogView.findViewById<TextView>(R.id.tvPricePerGb)
+        val tvVerdict = dialogView.findViewById<TextView>(R.id.tvBargainVerdict)
+        val tvBadge = dialogView.findViewById<TextView>(R.id.tvBargainBadge)
+        val btnSave = dialogView.findViewById<MaterialButton>(R.id.btnSaveBargain)
+        val btnCancel = dialogView.findViewById<MaterialButton>(R.id.btnCancelBargain)
+
+        val historyCount = testHistory.loadHistory().size
+        etLabel.setText("Disco #$historyCount")
+
+        var selectedCapGb = 1000.0
+
+        val recalculate = {
+            val priceStr = etPrice.text.toString().trim()
+            val price = priceStr.toDoubleOrNull()
+
+            if (price != null && price > 0) {
+                val pricePerGb = price / selectedCapGb
+                tvPricePerGb.text = String.format(Locale.US, "Costo: $%.3f por GB (Total $%.2f)", pricePerGb, price)
+
+                val isSsd = latestResult?.driveType?.contains("SSD", ignoreCase = true) == true
+
+                val (badgeText, badgeColor, verdictText) = when {
+                    isSsd -> when {
+                        pricePerGb <= 0.04 -> Triple("💎 GANGAZA", R.color.status_good, "¡Excelente precio para ser disco de estado sólido (SSD)!")
+                        pricePerGb <= 0.08 -> Triple("⚖️ PRECIO JUSTO", R.color.accent, "Precio estándar de mercado para SSD de segunda mano.")
+                        else -> Triple("💸 CARO", R.color.status_bad, "Está caro para comprar en desguace.")
+                    }
+                    else -> when {
+                        pricePerGb <= 0.018 -> Triple("💎 GANGAZA", R.color.status_good, "¡Muy barato! Vale totalmente la pena si está sano.")
+                        pricePerGb <= 0.035 -> Triple("⚖️ PRECIO JUSTO", R.color.accent, "Precio promedio aceptable para un HDD usado.")
+                        else -> Triple("💸 CARO", R.color.status_bad, "Precio alto para ser un disco de desguace.")
+                    }
+                }
+
+                tvBadge.text = badgeText
+                tvBadge.setTextColor(ContextCompat.getColor(this, badgeColor))
+                tvVerdict.text = verdictText
+                tvVerdict.setTextColor(ContextCompat.getColor(this, badgeColor))
+            } else {
+                tvPricePerGb.text = "Ingresa el precio que te piden"
+                tvVerdict.text = "Esperando número..."
+                tvBadge.text = "-- / --"
+            }
+        }
+
+        toggleCapacity.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (isChecked) {
+                selectedCapGb = when (checkedId) {
+                    R.id.btnCap250 -> 250.0
+                    R.id.btnCap500 -> 500.0
+                    R.id.btnCap2000 -> 2000.0
+                    else -> 1000.0
+                }
+                recalculate()
+            }
+        }
+
+        etPrice.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) { recalculate() }
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        })
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .create()
+
+        btnCancel.setOnClickListener { dialog.dismiss() }
+
+        btnSave.setOnClickListener {
+            val label = etLabel.text.toString().trim().ifBlank { "Disco #$historyCount" }
+            val priceStr = etPrice.text.toString().trim()
+            val bargainInfo = if (priceStr.isNotBlank()) {
+                val capLabel = if (selectedCapGb >= 1000) "${(selectedCapGb / 1000).toInt()}TB" else "${selectedCapGb.toInt()}GB"
+                "${tvBadge.text}: $$priceStr por $capLabel"
+            } else {
+                "Sin precio"
+            }
+
+            testHistory.updateLatestTestLabel(label, bargainInfo)
+            dialog.dismiss()
+        }
+
+        dialog.show()
     }
 
     private fun safeEjectDrive() {
@@ -172,8 +373,8 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("⏏️ Expulsar Disco")
             .setMessage("La aplicación ha cerrado todos los accesos al disco y liberado la memoria.\n\n" +
-                    "• Recuerda que los motores del disco mecánico siguen girando mientras el cable USB le suministre energía eléctrica.\n\n" +
-                    "• Si quieres que el disco detenga sus platos antes de desconectarlo, puedes pulsar 'Abrir Almacenamiento' y tocar en 'Expulsar'.")
+                    "• Los motores del disco mecánico siguen girando mientras el cable USB le suministre energía eléctrica.\n\n" +
+                    "• Si quieres que el disco detenga sus platos antes de desconectarlo, pulsa 'Abrir Almacenamiento' y dale a 'Expulsar'.")
             .setPositiveButton("Abrir Almacenamiento") { _, _ ->
                 try {
                     startActivity(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS))
@@ -198,46 +399,14 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    private fun renderResult(result: SimpleTestResult) {
-        binding.tvVerdictTitle.text = result.verdictTitle
-        binding.tvVerdictDetail.text = result.verdictDetail
-
-        binding.tvSpeedResult.visibility = View.VISIBLE
-        binding.tvSpeedResult.text = result.speedText
-
-        when {
-            result.isGood -> {
-                val color = ContextCompat.getColor(this, R.color.status_good)
-                binding.ivStatusIcon.setImageResource(R.drawable.ic_check_circle)
-                binding.ivStatusIcon.imageTintList = ColorStateList.valueOf(color)
-                binding.tvVerdictTitle.setTextColor(color)
-                binding.tvSpeedResult.setTextColor(color)
-                hapticHelper.vibrateSuccess()
-            }
-            result.isWarning -> {
-                val color = ContextCompat.getColor(this, R.color.status_warning)
-                binding.ivStatusIcon.setImageResource(R.drawable.ic_alert_triangle)
-                binding.ivStatusIcon.imageTintList = ColorStateList.valueOf(color)
-                binding.tvVerdictTitle.setTextColor(color)
-                binding.tvSpeedResult.setTextColor(color)
-                hapticHelper.vibrateWarning()
-            }
-            else -> {
-                val color = ContextCompat.getColor(this, R.color.status_bad)
-                binding.ivStatusIcon.setImageResource(R.drawable.ic_x_circle)
-                binding.ivStatusIcon.imageTintList = ColorStateList.valueOf(color)
-                binding.tvVerdictTitle.setTextColor(color)
-                binding.tvSpeedResult.setTextColor(color)
-                hapticHelper.vibrateFailure()
-            }
-        }
-    }
-
     private fun showReadyState(message: String) {
         binding.tvVerdictTitle.text = "LISTO PARA PROBAR"
         binding.tvVerdictTitle.setTextColor(ContextCompat.getColor(this, R.color.text_title))
         binding.tvVerdictDetail.text = message
         binding.tvSpeedResult.visibility = View.GONE
+        binding.tvLatencyResult.visibility = View.GONE
+        binding.badgeDriveType.visibility = View.GONE
+        binding.btnOpenBargainDialog.visibility = View.GONE
         binding.ivStatusIcon.setImageResource(R.drawable.ic_harddrive)
         binding.ivStatusIcon.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(this, R.color.primary))
     }
@@ -245,10 +414,10 @@ class MainActivity : AppCompatActivity() {
     private fun showHistoryDialog() {
         val historyList = testHistory.loadHistory()
         val builder = AlertDialog.Builder(this)
-        builder.setTitle("Historial de Particiones Probadas")
+        builder.setTitle("Historial de Discos Probados")
 
         if (historyList.isEmpty()) {
-            builder.setMessage("Aún no has probado ninguna partición en esta sesión.")
+            builder.setMessage("Aún no has probado ningún disco en esta sesión.")
             builder.setPositiveButton("Aceptar", null)
             builder.show()
             return
@@ -265,6 +434,9 @@ class MainActivity : AppCompatActivity() {
             val tvVerdict = itemView.findViewById<TextView>(R.id.tvItemVerdict)
             val tvDate = itemView.findViewById<TextView>(R.id.tvItemDate)
             val tvDetails = itemView.findViewById<TextView>(R.id.tvItemDetails)
+            val tvLabel = itemView.findViewById<TextView>(R.id.tvItemLabel)
+            val tvBargain = itemView.findViewById<TextView>(R.id.tvItemBargain)
+            val tvDriveType = itemView.findViewById<TextView>(R.id.tvItemDriveType)
 
             tvVerdict.text = item.verdict
             tvVerdict.setTextColor(
@@ -273,6 +445,28 @@ class MainActivity : AppCompatActivity() {
             )
             tvDate.text = item.dateStr
             tvDetails.text = item.details
+
+            if (!item.label.isNullOrBlank()) {
+                tvLabel.visibility = View.VISIBLE
+                tvLabel.text = "🏷️ ${item.label}"
+            } else {
+                tvLabel.visibility = View.GONE
+            }
+
+            if (!item.bargainInfo.isNullOrBlank()) {
+                tvBargain.visibility = View.VISIBLE
+                tvBargain.text = item.bargainInfo
+            } else {
+                tvBargain.visibility = View.GONE
+            }
+
+            if (!item.driveType.isNullOrBlank()) {
+                val latency = if (!item.latencyText.isNullOrBlank()) " | ${item.latencyText}" else ""
+                tvDriveType.text = "${item.driveType}$latency"
+                tvDriveType.visibility = View.VISIBLE
+            } else {
+                tvDriveType.visibility = View.GONE
+            }
 
             container.addView(itemView)
         }

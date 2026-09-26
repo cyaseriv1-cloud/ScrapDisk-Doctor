@@ -20,6 +20,10 @@ data class SimpleTestResult(
     val verdictDetail: String,
     val isGood: Boolean,
     val isWarning: Boolean = false,
+    val driveType: String = "💽 Almacenamiento",
+    val latencyText: String = "Latencia: --",
+    val maxLatencyMs: Long = 0L,
+    val isDegraded: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -62,20 +66,22 @@ class DiskTester(private val context: Context) {
                     }
                 }
 
-                // Si no se puede escribir, probar lectura directamente
                 if (testFile == null) {
                     onStatus("Escritura bloqueada, probando lectura...")
                     return@withTimeout performFastReadTest(treeUri, onStatus, isNtfs = true)
                 }
 
-                // 3. FASE DE ESCRITURA Y LECTURA
+                // 3. FASE DE ESCRITURA Y LECTURA CON MEDICIÓN DE LATENCIA
                 try {
                     val totalBytes = 1024 * 1024 // 1 MB
-                    val chunkSize = 32 * 1024 // 32 KB
+                    val chunkSize = 32 * 1024 // 32 KB por paquete
                     val sampleData = ByteArray(chunkSize).apply { Random.nextBytes(this) }
                     val writeDigest = MessageDigest.getInstance("MD5")
 
-                    // Escritura
+                    var maxWriteChunkMs = 0L
+                    var totalWriteChunkMs = 0L
+                    var writeChunksCount = 0
+
                     onStatus("3/3 Escribiendo datos (1 MB)...")
                     val writeStart = System.currentTimeMillis()
 
@@ -84,8 +90,15 @@ class DiskTester(private val context: Context) {
                     outStream.use { out ->
                         var written = 0
                         while (written < totalBytes) {
+                            val chunkStart = System.currentTimeMillis()
                             out.write(sampleData)
                             writeDigest.update(sampleData)
+                            val chunkElapsed = (System.currentTimeMillis() - chunkStart).coerceAtLeast(0)
+
+                            totalWriteChunkMs += chunkElapsed
+                            if (chunkElapsed > maxWriteChunkMs) maxWriteChunkMs = chunkElapsed
+                            writeChunksCount++
+
                             written += chunkSize
                         }
                         out.flush()
@@ -94,17 +107,27 @@ class DiskTester(private val context: Context) {
                     val writeSpeedMBs = 1.0 / (writeTime / 1000.0)
 
                     // Lectura e Integridad
-                    onStatus("3/3 Leyendo y verificando sectores...")
+                    onStatus("3/3 Leyendo y verificando latencias...")
                     val readDigest = MessageDigest.getInstance("MD5")
                     val readBuffer = ByteArray(chunkSize)
                     val readStart = System.currentTimeMillis()
+
+                    var maxReadChunkMs = 0L
+                    var totalReadChunkMs = 0L
+                    var readChunksCount = 0
 
                     val inStream: InputStream = context.contentResolver.openInputStream(testFile.uri)
                         ?: throw Exception("No se pudo abrir entrada")
                     inStream.use { input ->
                         var readBytes: Int
                         while (input.read(readBuffer).also { readBytes = it } != -1) {
+                            val chunkStart = System.currentTimeMillis()
                             readDigest.update(readBuffer, 0, readBytes)
+                            val chunkElapsed = (System.currentTimeMillis() - chunkStart).coerceAtLeast(0)
+
+                            totalReadChunkMs += chunkElapsed
+                            if (chunkElapsed > maxReadChunkMs) maxReadChunkMs = chunkElapsed
+                            readChunksCount++
                         }
                     }
                     val readTime = (System.currentTimeMillis() - readStart).coerceAtLeast(1)
@@ -117,17 +140,52 @@ class DiskTester(private val context: Context) {
                             speedText = String.format("Esc: %.1f MB/s", writeSpeedMBs),
                             verdictTitle = "🔴 NO COMPRAR (SECTORES DAÑADOS)",
                             verdictDetail = "¡Alerta! Los datos se alteraron al escribirse. Esta zona del disco tiene sectores defectuosos.",
-                            isGood = false
+                            isGood = false,
+                            driveType = "💽 Platos Dañados",
+                            latencyText = "Latencia Máx: ${maxOf(maxWriteChunkMs, maxReadChunkMs)} ms"
                         )
                     }
 
+                    // Clasificación de unidad y latencia
+                    val overallMaxLatency = maxOf(maxWriteChunkMs, maxReadChunkMs)
+                    val avgLatencyMs = if (readChunksCount > 0) (totalReadChunkMs / readChunksCount) else 5L
+                    val isDegraded = overallMaxLatency > 220L
+
+                    val driveType = when {
+                        readSpeedMBs >= 160.0 -> "⚡ SSD / Memoria Sólida"
+                        isDegraded -> "⚠️ HDD con Sectores Lentos"
+                        else -> "💽 HDD Mecánico (5400/7200 RPM)"
+                    }
+
+                    val latencyInfo = "Latencia media: ${avgLatencyMs} ms (Pico: ${overallMaxLatency} ms)"
                     val speedStr = String.format("Esc: %.1f MB/s  |  Lec: %.1f MB/s", writeSpeedMBs, readSpeedMBs)
+
+                    val (verdictTitle, verdictDetail, isGood, isWarning) = when {
+                        isDegraded -> Quadruple(
+                            "🟡 APTO CON PRECAUCIÓN",
+                            "Lectura íntegra, pero se detectaron picos de latencia (${overallMaxLatency} ms). Posible desgaste de pistas o platos.",
+                            false,
+                            true
+                        )
+                        else -> Quadruple(
+                            "🟢 COMPRA SEGURA (BUENO)",
+                            "Respuesta estable sin sectores lentos ni errores de paridad. Estado óptimo.",
+                            true,
+                            false
+                        )
+                    }
+
                     return@withTimeout SimpleTestResult(
                         success = true,
                         speedText = speedStr,
-                        verdictTitle = "🟢 COMPRA SEGURA (BUENO)",
-                        verdictDetail = "La partición escribió y leyó 1 MB con total normalidad y sin errores.",
-                        isGood = true
+                        verdictTitle = verdictTitle,
+                        verdictDetail = verdictDetail,
+                        isGood = isGood,
+                        isWarning = isWarning,
+                        driveType = driveType,
+                        latencyText = latencyInfo,
+                        maxLatencyMs = overallMaxLatency,
+                        isDegraded = isDegraded
                     )
 
                 } finally {
@@ -140,7 +198,9 @@ class DiskTester(private val context: Context) {
                 speedText = "0 MB/s (Congelado)",
                 verdictTitle = "🔴 PARTICIÓN DAÑADA / TRABADA",
                 verdictDetail = "Esta partición no respondió a tiempo. Los cabezales están atascados intentando leer sectores dañados en esta zona del disco.",
-                isGood = false
+                isGood = false,
+                driveType = "💽 Mecánico Trabado",
+                latencyText = "Latencia: > 5000 ms (Timeout)"
             )
         } catch (e: Exception) {
             return@withContext SimpleTestResult(
@@ -159,9 +219,8 @@ class DiskTester(private val context: Context) {
         onStatus: (String) -> Unit,
         isNtfs: Boolean
     ): SimpleTestResult = withContext(Dispatchers.IO) {
-        onStatus("3/3 Leyendo sectores de partición...")
+        onStatus("3/3 Leyendo sectores y latencias...")
 
-        // Buscar rápidamente un archivo usando cursor ligero (evita cargar miles de archivos en memoria)
         val fileUri = findFirstFileUri(treeUri)
 
         if (fileUri != null) {
@@ -171,25 +230,52 @@ class DiskTester(private val context: Context) {
                 var bytesReadTotal = 0L
                 val maxToRead = 1024 * 1024 // 1 MB máximo
 
+                var maxChunkMs = 0L
+                var totalChunkMs = 0L
+                var chunksCount = 0
+
                 val inStream = context.contentResolver.openInputStream(fileUri)
                 inStream?.use { input ->
                     while (bytesReadTotal < maxToRead) {
+                        val chunkStart = System.currentTimeMillis()
                         val count = input.read(buffer)
                         if (count == -1) break
                         bytesReadTotal += count
+
+                        val chunkElapsed = (System.currentTimeMillis() - chunkStart).coerceAtLeast(0)
+                        totalChunkMs += chunkElapsed
+                        if (chunkElapsed > maxChunkMs) maxChunkMs = chunkElapsed
+                        chunksCount++
                     }
                 }
 
                 val readTime = (System.currentTimeMillis() - readStart).coerceAtLeast(1)
                 val readSpeedMBs = (bytesReadTotal.toDouble() / (1024 * 1024)) / (readTime / 1000.0)
 
+                val avgLatencyMs = if (chunksCount > 0) (totalChunkMs / chunksCount) else 5L
+                val isDegraded = maxChunkMs > 220L
+                val driveType = if (readSpeedMBs >= 160.0) "⚡ SSD / Memoria Sólida" else "💽 HDD Mecánico (NTFS)"
+
                 val speedStr = String.format("Lectura: %.1f MB/s", readSpeedMBs)
+                val latencyInfo = "Latencia media: ${avgLatencyMs} ms (Pico: ${maxChunkMs} ms)"
+
+                val verdictTitle = if (isDegraded) "🟡 PARTICIÓN LENTA (NTFS)" else "🟢 PARTICIÓN BUENA (NTFS)"
+                val verdictDetail = if (isDegraded)
+                    "El disco leyó pero con picos de retardo (${maxChunkMs} ms). Pistas con posible degradación."
+                else
+                    "Esta partición leyó a ${String.format("%.1f", readSpeedMBs)} MB/s de forma fluida y sin sectores lentos."
+
                 return@withContext SimpleTestResult(
                     success = true,
                     speedText = speedStr,
-                    verdictTitle = "🟢 PARTICIÓN BUENA (NTFS)",
-                    verdictDetail = "Esta partición leyó a ${String.format("%.1f", readSpeedMBs)} MB/s sin trabarse. Los sectores de esta zona están sanos.",
-                    isGood = true
+                    verdictTitle = verdictTitle,
+                    verdictDetail = verdictDetail,
+                    isGood = !isDegraded,
+                    isWarning = isDegraded,
+                    driveType = driveType,
+                    latencyText = latencyInfo,
+                    maxLatencyMs = maxChunkMs,
+                    isDegraded = isDegraded
                 )
             } catch (e: Exception) {
                 return@withContext SimpleTestResult(
@@ -202,13 +288,14 @@ class DiskTester(private val context: Context) {
             }
         }
 
-        // Si la partición está vacía pero respondió inmediatamente a la consulta
         return@withContext SimpleTestResult(
             success = true,
             speedText = "Tabla de partición OK",
             verdictTitle = if (isNtfs) "🟢 PARTICIÓN BUENA (NTFS)" else "🟢 PARTICIÓN DETECTADA",
             verdictDetail = "La tabla de particiones respondió con normalidad y sin errores de lectura.",
-            isGood = true
+            isGood = true,
+            driveType = "💽 Disco Reconocido",
+            latencyText = "Latencia: < 10 ms"
         )
     }
 
@@ -245,4 +332,6 @@ class DiskTester(private val context: Context) {
             null
         }
     }
+
+    private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 }

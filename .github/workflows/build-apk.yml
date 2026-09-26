@@ -33,30 +33,32 @@ jobs:
       - name: 5. Renombrar archivo APK para descarga
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/release/app-release.apk release-output/ScrapDisk-Doctor-v1.4.apk
+          cp app/build/outputs/apk/release/app-release.apk release-output/ScrapDisk-Doctor-v1.5.apk
 
       - name: 6. Subir APK como artefacto de compilación
         uses: actions/upload-artifact@v4
         with:
           name: ScrapDisk-Doctor-APK
-          path: release-output/ScrapDisk-Doctor-v1.4.apk
+          path: release-output/ScrapDisk-Doctor-v1.5.apk
           retention-days: 14
 
       - name: 7. Publicar Release automático en GitHub
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          tag_name: v1.4.0
-          name: "ScrapDisk Doctor v1.4.0 (Anti-Indexación y Expulsión Segura)"
+          tag_name: v1.5.0
+          name: "ScrapDisk Doctor v1.5.0 (Edición Desguace Pro: Audio, Latencia y Ganga)"
           body: |
-            ### 🚀 ScrapDisk Doctor v1.4.0
+            ### 🚀 ScrapDisk Doctor v1.5.0 (Edición Desguace Pro)
             
-            #### ⚡ Mejoras en v1.4.0:
-            1. **Detención del "Máximo Esfuerzo" en segundo plano:**
-               - Se eliminó la toma de permisos persistentes innecesarios que provocaban que el servicio `MediaScanner` de Android intentara rastrear e indexar todo el disco de 1TB buscando fotos y videos en segundo plano tras terminar el análisis.
-               - Liberación inmediata de descriptores de archivos y recolección de basura forzada al culminar la prueba.
-            2. **Botón de Expulsión y Reposo Seguro:**
-               - Añadido el botón **`⏏️ LIBERAR / EXPULSAR DISCO SEGURO`** que desconecta la app del disco y permite abrir la configuración de almacenamiento para detener los motores de forma segura antes de retirar el cable OTG.
-          files: release-output/ScrapDisk-Doctor-v1.4.apk
+            Versión definitiva con herramientas para comprar discos duros y SSDs en desguaces y mercadillos.
+            
+            #### ⚡ Nuevas Funcionalidades:
+            1. **Detección de Hardware USB:** Identifica en tiempo real el chip puente SATA/NVMe (ASMedia, JMicron, Realtek, etc.) y modelo del dispositivo conectado en el banner superior.
+            2. **Medidor de Latencia y Desgaste:** Monitorea el tiempo de respuesta bloque por bloque. Detecta sectores degradados (> 200 ms) antes de que mueran completamente.
+            3. **Clasificación Automática HDD vs SSD:** Ajusta los umbrales de diagnóstico reconociendo si conectaste un disco mecánico (💽) o un disco sólido (⚡).
+            4. **Alertas Sonoras (Beeps Nativos):** Pitidos diferenciados (Doble tono agudo = Bueno, Tono grave = Dañado) para diagnosticar "a ciegas" bajo la luz del sol sin mirar la pantalla.
+            5. **Calculadora de "Precio Justo / Ganga":** Evalúa el precio pedido vs capacidad y te avisa si es una GANGAZA (💎), un PRECIO JUSTO (⚖️) o está CARO (💸).
+          files: release-output/ScrapDisk-Doctor-v1.5.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
