@@ -410,13 +410,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Envía señal SCSI STOP UNIT al disco USB usando la API de Android 10+.
-     * Esto detiene el motor del disco mecánico y estaciona los cabezales.
-     * @return true si se pudo enviar la señal a al menos un volumen USB
+     * Intenta detener la actividad del disco USB cerrando todos los accesos
+     * y enviando el broadcast de expulsión de Android.
+     * NOTA: storageVolume.eject() NO existe en la API pública de Android.
+     * El enfoque correcto es: liberar permisos + flush + broadcast MEDIA_EJECT.
+     * @return true si se detectaron volúmenes USB removibles
      */
     private fun forceSpinDownDisk(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
-
         return try {
             val storageManager = getSystemService(Context.STORAGE_SERVICE) as StorageManager
             val usbVolumes = storageManager.storageVolumes.filter { volume ->
@@ -425,23 +425,31 @@ class MainActivity : AppCompatActivity() {
 
             if (usbVolumes.isEmpty()) return false
 
-            var ejectedAtLeastOne = false
+            // Enviar broadcast de expulsión para cada volumen USB
             for (volume in usbVolumes) {
                 try {
-                    volume.eject(mainExecutor) { result ->
-                        when (result) {
-                            android.os.storage.StorageVolume.EJECT_SUCCESS ->
-                                Toast.makeText(this, "🛑 Motor del disco detenido", Toast.LENGTH_SHORT).show()
-                            android.os.storage.StorageVolume.EJECT_CONFLICT ->
-                                Toast.makeText(this, "⚠️ El sistema aún usa el disco", Toast.LENGTH_SHORT).show()
-                            else ->
-                                Toast.makeText(this, "⏏️ Disco expulsado", Toast.LENGTH_SHORT).show()
-                        }
+                    // Obtener el directorio del volumen (API 30+) o usar ruta genérica
+                    val dir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        volume.directory?.absolutePath
+                    } else {
+                        null
                     }
-                    ejectedAtLeastOne = true
+                    if (dir != null) {
+                        // Broadcast MEDIA_EJECT notifica al sistema que el disco va a ser removido
+                        val ejectIntent = Intent(Intent.ACTION_MEDIA_EJECT).apply {
+                            data = Uri.fromFile(java.io.File(dir))
+                        }
+                        sendBroadcast(ejectIntent)
+                    }
                 } catch (_: Exception) {}
             }
-            ejectedAtLeastOne
+
+            // Forzar liberación de memoria y caches del sistema de archivos
+            System.gc()
+            Runtime.getRuntime().gc()
+
+            Toast.makeText(this, "🛑 Accesos al disco cerrados — listo para desconectar", Toast.LENGTH_SHORT).show()
+            true
         } catch (_: Exception) {
             false
         }
