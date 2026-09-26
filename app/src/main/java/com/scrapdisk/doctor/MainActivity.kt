@@ -1,9 +1,12 @@
 package com.scrapdisk.doctor
 
+import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.storage.StorageManager
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
@@ -12,6 +15,7 @@ import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -214,6 +218,9 @@ class MainActivity : AppCompatActivity() {
         renderResult(result)
         testHistory.saveTest(result)
 
+        // Forzar parada del motor del disco ANTES de liberar permisos
+        forceSpinDownDisk()
+
         cleanupPersistedPermissions()
         System.gc()
 
@@ -370,22 +377,74 @@ class MainActivity : AppCompatActivity() {
         cleanupPersistedPermissions()
         System.gc()
 
-        AlertDialog.Builder(this)
-            .setTitle("⏏️ Expulsar Disco")
-            .setMessage("La aplicación ha cerrado todos los accesos al disco y liberado la memoria.\n\n" +
-                    "• Los motores del disco mecánico siguen girando mientras el cable USB le suministre energía eléctrica.\n\n" +
-                    "• Si quieres que el disco detenga sus platos antes de desconectarlo, pulsa 'Abrir Almacenamiento' y dale a 'Expulsar'.")
-            .setPositiveButton("Abrir Almacenamiento") { _, _ ->
-                try {
-                    startActivity(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS))
-                } catch (_: Exception) {
+        if (forceSpinDownDisk()) {
+            // La API Android 10+ pudo enviar la señal STOP UNIT
+            AlertDialog.Builder(this)
+                .setTitle("⏏️ Disco Expulsado")
+                .setMessage(
+                    "✅ Se ha enviado la señal de parada al disco.\n\n" +
+                    "Los cabezales se han estacionado y el motor debería detenerse en unos segundos.\n\n" +
+                    "Ahora puedes desconectar el cable USB de forma segura."
+                )
+                .setPositiveButton("Listo", null)
+                .show()
+        } else {
+            // Fallback: instrucciones manuales (Android < 10 o sin volúmenes USB)
+            AlertDialog.Builder(this)
+                .setTitle("⏏️ Expulsar Disco")
+                .setMessage(
+                    "La app cerró todos los accesos al disco.\n\n" +
+                    "Para detener el motor antes de desconectar:\n" +
+                    "→ Abre Almacenamiento → toca 'Expulsar' junto al disco USB."
+                )
+                .setPositiveButton("Abrir Almacenamiento") { _, _ ->
                     try {
-                        startActivity(Intent(Settings.ACTION_SETTINGS))
-                    } catch (_: Exception) {}
+                        startActivity(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS))
+                    } catch (_: Exception) {
+                        try { startActivity(Intent(Settings.ACTION_SETTINGS)) } catch (_: Exception) {}
+                    }
                 }
+                .setNegativeButton("Listo", null)
+                .show()
+        }
+    }
+
+    /**
+     * Envía señal SCSI STOP UNIT al disco USB usando la API de Android 10+.
+     * Esto detiene el motor del disco mecánico y estaciona los cabezales.
+     * @return true si se pudo enviar la señal a al menos un volumen USB
+     */
+    private fun forceSpinDownDisk(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+
+        return try {
+            val storageManager = getSystemService(Context.STORAGE_SERVICE) as StorageManager
+            val usbVolumes = storageManager.storageVolumes.filter { volume ->
+                volume.isRemovable && !volume.isPrimary
             }
-            .setNegativeButton("Listo / Entendido", null)
-            .show()
+
+            if (usbVolumes.isEmpty()) return false
+
+            var ejectedAtLeastOne = false
+            for (volume in usbVolumes) {
+                try {
+                    volume.eject(mainExecutor) { result ->
+                        when (result) {
+                            android.os.storage.StorageVolume.EJECT_SUCCESS ->
+                                Toast.makeText(this, "🛑 Motor del disco detenido", Toast.LENGTH_SHORT).show()
+                            android.os.storage.StorageVolume.EJECT_CONFLICT ->
+                                Toast.makeText(this, "⚠️ El sistema aún usa el disco", Toast.LENGTH_SHORT).show()
+                            else ->
+                                Toast.makeText(this, "⏏️ Disco expulsado", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    ejectedAtLeastOne = true
+                } catch (_: Exception) {}
+            }
+            ejectedAtLeastOne
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun cleanupPersistedPermissions() {

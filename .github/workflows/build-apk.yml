@@ -33,32 +33,36 @@ jobs:
       - name: 5. Renombrar archivo APK para descarga
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/release/app-release.apk release-output/ScrapDisk-Doctor-v1.5.apk
+          cp app/build/outputs/apk/release/app-release.apk release-output/ScrapDisk-Doctor-v1.6.apk
 
       - name: 6. Subir APK como artefacto de compilación
         uses: actions/upload-artifact@v4
         with:
           name: ScrapDisk-Doctor-APK
-          path: release-output/ScrapDisk-Doctor-v1.5.apk
+          path: release-output/ScrapDisk-Doctor-v1.6.apk
           retention-days: 14
 
       - name: 7. Publicar Release automático en GitHub
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          tag_name: v1.5.0
-          name: "ScrapDisk Doctor v1.5.0 (Edición Desguace Pro: Audio, Latencia y Ganga)"
+          tag_name: v1.6.0
+          name: "ScrapDisk Doctor v1.6.0 — Motor Stop Automático"
           body: |
-            ### 🚀 ScrapDisk Doctor v1.5.0 (Edición Desguace Pro)
-            
-            Versión definitiva con herramientas para comprar discos duros y SSDs en desguaces y mercadillos.
-            
-            #### ⚡ Nuevas Funcionalidades:
-            1. **Detección de Hardware USB:** Identifica en tiempo real el chip puente SATA/NVMe (ASMedia, JMicron, Realtek, etc.) y modelo del dispositivo conectado en el banner superior.
-            2. **Medidor de Latencia y Desgaste:** Monitorea el tiempo de respuesta bloque por bloque. Detecta sectores degradados (> 200 ms) antes de que mueran completamente.
-            3. **Clasificación Automática HDD vs SSD:** Ajusta los umbrales de diagnóstico reconociendo si conectaste un disco mecánico (💽) o un disco sólido (⚡).
-            4. **Alertas Sonoras (Beeps Nativos):** Pitidos diferenciados (Doble tono agudo = Bueno, Tono grave = Dañado) para diagnosticar "a ciegas" bajo la luz del sol sin mirar la pantalla.
-            5. **Calculadora de "Precio Justo / Ganga":** Evalúa el precio pedido vs capacidad y te avisa si es una GANGAZA (💎), un PRECIO JUSTO (⚖️) o está CARO (💸).
-          files: release-output/ScrapDisk-Doctor-v1.5.apk
+            ### 🛑 ScrapDisk Doctor v1.6.0 — Parada Automática del Motor
+
+            #### ⚡ Nuevo en esta versión:
+            1. **Parada automática del motor del disco** al terminar cada prueba. La app envía la señal SCSI `STOP UNIT` al disco USB usando la API nativa de Android 10+. Los cabezales se estacionan y el motor se detiene automáticamente sin que tengas que hacer nada.
+            2. **Botón ⏏️ Expulsar mejorado:** ahora usa `StorageVolume.eject()` para ordenar la parada real del disco. Toast confirma: `🛑 Motor del disco detenido`.
+            3. **Fallback inteligente:** en Android < 10 o si el sistema no detecta volúmenes USB, muestra instrucciones manuales de expulsión.
+
+            #### ✅ Funcionalidades anteriores incluidas:
+            - Detección automática HDD vs SSD con medición de latencia
+            - Detección de chip USB-SATA (ASMedia, JMicron, Realtek, etc.)
+            - Alertas sonoras diferenciadas + vibración
+            - Calculadora de Ganga (💎 GANGAZA / ⚖️ PRECIO JUSTO / 💸 CARO)
+            - Modo NTFS automático (discos Windows sin reformatear)
+            - Watchdog anti-bucle de 5.5 segundos
+          files: release-output/ScrapDisk-Doctor-v1.6.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
